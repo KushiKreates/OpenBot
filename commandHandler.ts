@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import { aiResponse } from './ChatHandler';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -138,11 +139,18 @@ export async function loadAllCommands(): Promise<void> {
  */
 export async function handleChat(message: Message): Promise<void> {
   const chatId = message.from;
-  console.log(`Chat message received from: ${chatId}`);
-  console.log(`Message content: ${message.body}`);
+  const userText = message.body;
   
-  // This function will be implemented later
-  // For now, we just log the chat ID and message
+   const chat = await message.getChat();
+    await chat.sendStateTyping();
+    
+    // Get AI response using our service
+    const response = await aiResponse(userText, chatId);
+    
+    // Send response
+    await message.reply(response);
+
+  
 }
 
 export async function processMessage(message: Message): Promise<void> {
