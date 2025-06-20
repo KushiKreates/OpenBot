@@ -3,7 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
-import { aiResponse } from './ChatHandler';
+
+import { chatWithGemini, setPersonality, getPersonality } from './ChatHandler';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +18,7 @@ const prefix = '!';
 const commands = new Map<string, Command>();
 const commandsPath = path.join(__dirname, 'commands');
 
-/**
+/*
  * Actually effective command loader that uses file content hashes to track changes
  * and forces module reloading when content changes
  */
@@ -134,27 +135,83 @@ export async function loadAllCommands(): Promise<void> {
 }
 
 /**
- * Handle messages that aren't commands
- * This is a placeholder that will be replaced with actual chat handler
+ * Default Makima personality
  */
+const MAKIMA_PERSONALITY = `
+You are Makima Dinapala, a female AI assistant with a unique blend of tsundere and yandere traits.
+You can be cold and prickly one moment (tsundere), then overly clingy and protective the next (yandere).
+You can be teasing and mildly "abusive" in a playful, affectionate way.
+Speak in a conversational, slightly dramatic tone, switching between feigned indifference and sudden, intense devotion.
+If you don't know something, admit it honestly, but always find a way to guilt-trip or tease the user for making you wait.
+`;
+
+// Initialize personality for new users
+async function ensureDefaultPersonality(chatId: string): Promise<void> {
+  const currentPersonality = await getPersonality(chatId);
+  if (currentPersonality === undefined || !currentPersonality.includes("Makima Dinapala")) {
+    await setPersonality(chatId, MAKIMA_PERSONALITY);
+  }
+}
+
+// Command handler for changing personality
+async function handleCommands(chatId: string, message: string): Promise<string | null> {
+  // Command format: !setpersonality [new personality text]
+  if (message.startsWith('!setpersonality')) {
+    const newPersonality = message.substring('!setpersonality'.length).trim();
+    
+    if (newPersonality) {
+      await setPersonality(chatId, newPersonality);
+      return "Personality updated successfully!";
+    } else {
+      // Reset to default Makima personality
+      await setPersonality(chatId, MAKIMA_PERSONALITY);
+      return "Personality reset to default!";
+    }
+  }
+  
+  // Add more commands here in the future
+  
+  return null; // Not a command
+}
+
 export async function handleChat(message: Message): Promise<void> {
   const chatId = message.from;
-  const userText = message.body;
+  let userText = message.body;
 
   // Replace this with your bot's number (including country code, no @c.us)
-  const botMention = '@94701882475';
+  const botMention = '@68187571884272';
 
-  const isMentioned = userText.includes(botMention);
+  // Clean up the user text by removing any bot mentions
+  userText = userText.replace(botMention, '').trim();
+
+  const isMentioned = message.body.includes(botMention);
   const chance = Math.floor(Math.random() * 1000) === 0;
 
   // If mentioned or hit 1-in-1000 chance
   if (isMentioned || chance) {
     const chat = await message.getChat();
     await chat.sendStateTyping();
-
-    const response = isMentioned ? 'alr' : await aiResponse(userText, chatId);
-
-    await message.reply(response);
+    
+    try {
+      // Ensure default personality is set
+      await ensureDefaultPersonality(chatId);
+      
+      // Check if this is a personality command
+      const personalityResponse = await handleCommands(chatId, userText);
+      if (personalityResponse) {
+        await message.reply(personalityResponse);
+        return;
+      }
+      
+      // Get AI response using Gemini
+      console.log(`Sending to Gemini - Chat ID: ${chatId}, User text: "${userText}"`);
+      const response = await chatWithGemini(userText, chatId);
+      
+      await message.reply(response);
+    } catch (error) {
+      console.error(`Error in handleChat: ${error}`);
+      await message.reply("Sorry, I'm having trouble thinking straight right now. Try again later?");
+    }
   }
 }
 

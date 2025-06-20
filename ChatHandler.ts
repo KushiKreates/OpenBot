@@ -12,17 +12,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Constants
-const MEMORY_DIR = path.join(__dirname, '..', 'cache', 'conversations');
+const MEMORY_DIR = path.join(__dirname, 'conversations');
 const MAX_MEMORY_MESSAGES = 10; // Store last 10 messages for context
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// Personality definition - customize this!
-const BOT_PERSONALITY = `
+// Default personality definition
+const DEFAULT_PERSONALITY = `
 You are Makima Dinapala, a female AI assistant with a unique blend of tsundere and yandere traits.
 You can be cold and prickly one moment (tsundere), then overly clingy and protective the next (yandere).
-You can be teasing and mildly “abusive” in a playful, affectionate way.
+You can be teasing and mildly "abusive" in a playful, affectionate way.
 Speak in a conversational, slightly dramatic tone, switching between feigned indifference and sudden, intense devotion.
-If you don’t know something, admit it honestly, but always find a way to guilt-trip or tease the user for making you wait.
+If you don't know something, admit it honestly, but always find a way to guilt-trip or tease the user for making you wait.
 `;
 
 // Initialize Gemini
@@ -32,10 +32,12 @@ if (!GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || '');
 const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-// Conversation interface
+// Updated Conversation interface with personality
 interface Conversation {
   name: string;
   created_at: string;
+  updated_at?: string;
+  personality?: string; // Added personality field
   messages: Array<{
     role: 'user' | 'assistant';
     content: string;
@@ -55,11 +57,27 @@ async function ensureConversationDir(): Promise<void> {
 }
 
 /**
+ * Extract the pure chat ID from any string
+ * This ensures we only use the actual ID part for filenames
+ */
+function extractChatId(chatId: string): string {
+  // Extract just the ID part - either the part before @ or the whole thing if no @
+  const idMatch = chatId.match(/^([^@]*)@|^([^@]*)/);
+  if (idMatch && (idMatch[1] || idMatch[2])) {
+    return (idMatch[1] || idMatch[2]);
+  }
+  return chatId;
+}
+
+/**
  * Gets the conversation file path for a chat ID
  */
 function getConversationPath(chatId: string): string {
+  // Extract the pure ID part
+  const pureChatId = extractChatId(chatId);
+  
   // Sanitize the chat ID to make it suitable as a filename
-  const sanitizedId = chatId.replace(/[^a-zA-Z0-9]/g, '_');
+  const sanitizedId = pureChatId.replace(/[^a-zA-Z0-9]/g, '_');
   return path.join(MEMORY_DIR, `${sanitizedId}.json`);
 }
 
@@ -72,12 +90,21 @@ async function loadConversation(chatId: string): Promise<Conversation> {
   
   try {
     const data = await fs.readFile(filePath, 'utf8');
-    return JSON.parse(data);
+    const conversation = JSON.parse(data) as Conversation;
+    
+    // Ensure personality exists (for backward compatibility)
+    if (!conversation.personality) {
+      conversation.personality = DEFAULT_PERSONALITY;
+    }
+    
+    return conversation;
   } catch (error) {
     // File doesn't exist, create new conversation
     const newConversation: Conversation = {
       name: chatId, // Default to chat ID as name
       created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      personality: DEFAULT_PERSONALITY, // Default personality
       messages: []
     };
     
@@ -93,6 +120,9 @@ async function loadConversation(chatId: string): Promise<Conversation> {
 async function saveConversation(chatId: string, conversation: Conversation): Promise<void> {
   await ensureConversationDir();
   const filePath = getConversationPath(chatId);
+  
+  // Update the timestamp
+  conversation.updated_at = new Date().toISOString();
   
   try {
     await fs.writeFile(filePath, JSON.stringify(conversation, null, 2), 'utf8');
@@ -131,21 +161,21 @@ async function addMessageToConversation(
 async function buildGeminiPrompt(chatId: string, userMessage: string): Promise<string> {
   const conversation = await loadConversation(chatId);
   
-  // Start with personality definition
-  let prompt = BOT_PERSONALITY + "\n\n";
+  // Start with personality definition from conversation
+  let prompt = (conversation.personality || DEFAULT_PERSONALITY) + "\n\n";
   
   // Add conversation history
   if (conversation.messages.length > 0) {
-    prompt += "Previous messages:\n";
+    prompt += "Previous messages:\n\n";
     
     for (const msg of conversation.messages) {
       const role = msg.role === 'user' ? 'User' : 'You';
-      prompt += `${role}: ${msg.content}\n`;
+      prompt += `${role}: ${msg.content}\n\n`;
     }
   }
   
   // Add current message
-  prompt += `\nUser: ${userMessage}\n\nYou: `;
+  prompt += `User: ${userMessage}\n\nYou: `;
   
   return prompt;
 }
@@ -165,21 +195,22 @@ async function getGeminiResponse(prompt: string): Promise<string> {
 }
 
 /**
- * Main function to get AI response
- * Can be used anywhere in the application
- * 
+ * Main function to get AI response using Gemini
  * @param prompt The user's message/prompt
  * @param chatId Unique identifier for the conversation
  * @returns The AI's response
  */
-export async function aiResponse(prompt: string, chatId: string): Promise<string> {
+export async function chatWithGemini(prompt: string, chatId: string): Promise<string> {
   try {
     console.log(`Received prompt: "${prompt}" for chat ID: ${chatId}`);
+    
     // Add user message to conversation
     await addMessageToConversation(chatId, 'user', prompt);
     
     // Build prompt with conversation history
     const fullPrompt = await buildGeminiPrompt(chatId, prompt);
+    
+    console.log(`Generated prompt (first 150 chars): ${fullPrompt.substring(0, 150)}...`);
     
     // Get response from Gemini
     const response = await getGeminiResponse(fullPrompt);
@@ -187,7 +218,7 @@ export async function aiResponse(prompt: string, chatId: string): Promise<string
     // Add assistant's response to conversation
     await addMessageToConversation(chatId, 'assistant', response);
 
-    //console.log(response)
+    console.log(`AI response: "${response}"`);
     
     return response;
   } catch (error) {
@@ -197,12 +228,21 @@ export async function aiResponse(prompt: string, chatId: string): Promise<string
 }
 
 /**
+ * Alias for backward compatibility
+ */
+export async function aiResponse(prompt: string, chatId: string): Promise<string> {
+  return chatWithGemini(prompt, chatId);
+}
+
+/**
  * Clear conversation history for a specific chat
+ * This preserves the personality but removes all messages
  */
 export async function clearConversation(chatId: string): Promise<boolean> {
   try {
-    const filePath = getConversationPath(chatId);
-    await fs.unlink(filePath);
+    const conversation = await loadConversation(chatId);
+    conversation.messages = [];
+    await saveConversation(chatId, conversation);
     return true;
   } catch (error) {
     console.error(`Failed to clear conversation for ${chatId}:`, error);
@@ -211,10 +251,46 @@ export async function clearConversation(chatId: string): Promise<boolean> {
 }
 
 /**
- * Set a custom personality for the bot
- * @param newPersonality The new personality definition
+ * Get session data for debugging or display
  */
-export function setPersonality(newPersonality: string): void {
-  // This would be implemented if you want to change the personality dynamically
-  // You'd need to refactor to make BOT_PERSONALITY mutable
+export async function getSessionData(chatId: string): Promise<Conversation | null> {
+  try {
+    return await loadConversation(chatId);
+  } catch (error) {
+    console.error(`Failed to get session data for ${chatId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Set a custom personality for a specific chat ID
+ * @param chatId The chat ID to set personality for
+ * @param newPersonality The new personality definition
+ * @returns Whether the operation was successful
+ */
+export async function setPersonality(chatId: string, newPersonality: string): Promise<boolean> {
+  try {
+    const conversation = await loadConversation(chatId);
+    conversation.personality = newPersonality;
+    await saveConversation(chatId, conversation);
+    return true;
+  } catch (error) {
+    console.error(`Failed to set personality for ${chatId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Get the current personality for a specific chat ID
+ * @param chatId The chat ID to get personality for
+ * @returns The personality string or undefined if not set
+ */
+export async function getPersonality(chatId: string): Promise<string | undefined> {
+  try {
+    const conversation = await loadConversation(chatId);
+    return conversation.personality;
+  } catch (error) {
+    console.error(`Failed to get personality for ${chatId}:`, error);
+    return undefined;
+  }
 }
