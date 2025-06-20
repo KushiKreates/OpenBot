@@ -140,17 +140,22 @@ export async function loadAllCommands(): Promise<void> {
 export async function handleChat(message: Message): Promise<void> {
   const chatId = message.from;
   const userText = message.body;
-  
-   const chat = await message.getChat();
-    await chat.sendStateTyping();
-    
-    // Get AI response using our service
-    const response = await aiResponse(userText, chatId);
-    
-    // Send response
-    await message.reply(response);
 
-  
+  // Replace this with your bot's number (including country code, no @c.us)
+  const botMention = '@94701882475';
+
+  const isMentioned = userText.includes(botMention);
+  const chance = Math.floor(Math.random() * 1000) === 0;
+
+  // If mentioned or hit 1-in-1000 chance
+  if (isMentioned || chance) {
+    const chat = await message.getChat();
+    await chat.sendStateTyping();
+
+    const response = isMentioned ? 'alr' : await aiResponse(userText, chatId);
+
+    await message.reply(response);
+  }
 }
 
 export async function processMessage(message: Message): Promise<void> {
